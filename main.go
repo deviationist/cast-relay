@@ -1,5 +1,5 @@
 // cast-relay relays mDNS and SSDP discovery between networks, for selected
-// devices only. See SPEC.md. This build implements MODE=observe.
+// devices only. See SPEC.md. MODE=relay relays; MODE=observe only watches.
 package main
 
 import (
@@ -25,6 +25,7 @@ type settings struct {
 	Probe           bool
 	ProbeInterval   time.Duration
 	IPForward       string // "off" (must be disabled) or "filtered" (platform blocks it)
+	SSDPNotify      bool
 }
 
 func main() {
@@ -48,7 +49,7 @@ func main() {
 	case "observe":
 		err = runObserve(ctx, s)
 	case "relay":
-		err = errors.New("relay mode is not implemented in this build; set MODE=observe")
+		err = runRelay(ctx, s)
 	}
 	if err != nil && !errors.Is(err, context.Canceled) {
 		slog.Error("stopped", "err", err)
@@ -64,6 +65,7 @@ func loadSettings() (settings, error) {
 		SummaryInterval: 5 * time.Minute,
 		Probe:           true,
 		ProbeInterval:   time.Minute,
+		SSDPNotify:      true,
 	}
 	if s.Mode != "relay" && s.Mode != "observe" {
 		return s, fmt.Errorf("MODE=%q: want relay or observe", s.Mode)
@@ -89,6 +91,13 @@ func loadSettings() (settings, error) {
 		s.Probe = false
 	default:
 		return s, fmt.Errorf("OBSERVE_PROBE=%q: want on or off", v)
+	}
+	switch v := env("SSDP_NOTIFY", "on"); v {
+	case "on":
+	case "off":
+		s.SSDPNotify = false
+	default:
+		return s, fmt.Errorf("SSDP_NOTIFY=%q: want on or off", v)
 	}
 	switch s.IPForward = env("IP_FORWARD", "off"); s.IPForward {
 	case "off", "filtered":

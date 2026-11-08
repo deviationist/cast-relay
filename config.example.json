@@ -1,0 +1,27 @@
+{
+  "networks": {
+    "lan":   { "interface": "eth0", "role": "client" },
+    "guest": { "interface": "eth1", "role": "client" },
+    "iot":   { "interface": "eth2", "role": "devices" }
+  },
+  "devices": [
+    {
+      "name": "living-room-tv",
+      "network": "iot",
+      "ip": "10.0.30.11",
+      "profiles": ["airplay", "dial"],
+      "visible_to": ["lan", "guest"],
+      "location_ports": [7678]
+    },
+    {
+      "name": "kitchen-speaker",
+      "network": "iot",
+      "ip": "10.0.30.12",
+      "profiles": ["airplay", "spotify-connect"],
+      "mdns": ["_vendor-app._tcp"],
+      "ssdp": ["urn:schemas-upnp-org:device:ZonePlayer:1"],
+      "visible_to": ["lan", "guest"],
+      "location_ports": [1400]
+    }
+  ]
+}
