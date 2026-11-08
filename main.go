@@ -24,6 +24,7 @@ type settings struct {
 	Interfaces      []string // optional allowlist of interface names
 	Probe           bool
 	ProbeInterval   time.Duration
+	IPForward       string // "off" (must be disabled) or "filtered" (platform blocks it)
 }
 
 func main() {
@@ -35,7 +36,7 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: s.LogLevel})))
 	slog.Info("starting", "version", version, "mode", s.Mode)
 
-	if err := checkNotRouter(); err != nil {
+	if err := checkNotRouter(s.IPForward); err != nil {
 		slog.Error("refusing to start", "err", err)
 		os.Exit(1)
 	}
@@ -89,6 +90,11 @@ func loadSettings() (settings, error) {
 	default:
 		return s, fmt.Errorf("OBSERVE_PROBE=%q: want on or off", v)
 	}
+	switch s.IPForward = env("IP_FORWARD", "off"); s.IPForward {
+	case "off", "filtered":
+	default:
+		return s, fmt.Errorf("IP_FORWARD=%q: want off or filtered", s.IPForward)
+	}
 	if v := env("INTERFACES", ""); v != "" {
 		for _, name := range strings.Split(v, ",") {
 			if name = strings.TrimSpace(name); name != "" {
@@ -119,8 +125,11 @@ func durationEnv(key string, def time.Duration) (time.Duration, error) {
 }
 
 // checkNotRouter refuses to run where IPv4 forwarding is on: a relay with legs
-// on several networks must never forward packets between them.
-func checkNotRouter() error {
+// on several networks must never forward packets between them. Some
+// platforms (RouterOS containers) start with forwarding on and give the
+// container no way to turn it off; there the operator must block forwarded
+// traffic outside the container and say so with IP_FORWARD=filtered.
+func checkNotRouter(mode string) error {
 	b, err := os.ReadFile("/proc/sys/net/ipv4/ip_forward")
 	if errors.Is(err, os.ErrNotExist) {
 		slog.Warn("cannot check ip_forward (no /proc); assuming a development machine")
@@ -129,8 +138,12 @@ func checkNotRouter() error {
 	if err != nil {
 		return fmt.Errorf("reading ip_forward: %w", err)
 	}
-	if strings.TrimSpace(string(b)) != "0" {
-		return errors.New("net.ipv4.ip_forward is enabled in this network namespace; the relay must not be able to route between its networks")
+	if strings.TrimSpace(string(b)) == "0" {
+		return nil
 	}
-	return nil
+	if mode == "filtered" {
+		slog.Warn("net.ipv4.ip_forward is enabled in this network namespace; continuing because IP_FORWARD=filtered says the platform drops traffic routed through the relay. If it doesn't, the relay is a path around your network isolation (SPEC.md §2)")
+		return nil
+	}
+	return errors.New("net.ipv4.ip_forward is enabled in this network namespace, so the kernel would route between the relay's networks. Disable it, or block forwarded traffic outside the container and set IP_FORWARD=filtered (SPEC.md §2)")
 }

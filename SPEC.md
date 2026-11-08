@@ -62,9 +62,31 @@ There may be several client networks and several device networks.
 It relays **discovery only** and never forwards IP traffic. The connections
 that follow discovery (an AirPlay stream, a DIAL HTTP request, a Spotify
 Connect handshake) go through the network's router and firewall, which must
-allow them (§8). At start-up the binary reads
-`/proc/sys/net/ipv4/ip_forward` and **exits if it is `1`**: a multi-homed
-relay that forwarded packets would bypass the isolation it exists to respect.
+allow them (§8).
+
+**Forwarding must be impossible.** A container with legs on several networks
+and `net.ipv4.ip_forward=1` is a router: a host on one network that uses the
+relay's address as its gateway gets routed into another network by the
+kernel, past the real router's firewall, without the relay program doing
+anything. At start-up the binary reads `/proc/sys/net/ipv4/ip_forward`:
+
+- `0`: fine.
+- `1` and `IP_FORWARD=off` (the default): **exits**.
+- `1` and `IP_FORWARD=filtered`: runs, with a warning at every start. The
+  operator asserts that the platform drops traffic routed through the relay.
+
+Some platforms start containers with forwarding on and give the container no
+way to change it (RouterOS: the namespace has `ip_forward=1`, `/proc/sys` is
+read-only, and the relay runs unprivileged). There, block it at layer 2
+around each leg (example in §10):
+
+- **out of the relay:** drop IPv4 whose source isn't the relay's own address
+  on that leg (forwarded packets keep the original sender's address);
+- **into the relay:** accept multicast (`224.0.0.0/4`), drop IPv4 whose
+  destination isn't the relay's own address (stops "use the relay as a
+  gateway").
+
+ARP and the relay's own unicast and multicast traffic are unaffected.
 
 ### Non-goals
 
@@ -236,6 +258,7 @@ the binary.
 | `CONFIG` | path | `/config/cast-relay.json` | the config file |
 | `SUMMARY_INTERVAL` | duration | `5m` | how often the counter summary is logged |
 | `SSDP_NOTIFY` | `on`, `off` | **[decide]** | relay `NOTIFY` announcements (§5.2) |
+| `IP_FORWARD` | `off`, `filtered` | `off` | what to do if the kernel forwards IPv4 in the relay's namespace (§2): `off` refuses to start; `filtered` runs, trusting that the platform drops routed traffic |
 | `INTERFACES` | comma list | all | observe mode only: limit to these interface names (relay mode takes them from the config file) |
 | `OBSERVE_PROBE` | `on`, `off` | `on` | observe mode: send an mDNS service enumeration (then browse each type found) and an SSDP `ssdp:all` search on every interface |
 | `OBSERVE_PROBE_INTERVAL` | duration | `1m` | how often observe mode probes |
@@ -358,6 +381,21 @@ no capabilities.
   the config file via `/container/mounts` with `mode=ro,noexec` (attached
   with `mountlists=`).
 - `restart-policy=on-failure` restarts it after a crash (checked on 7.25).
+- Set `dns=""`. Without a DNS server RouterOS refuses to start the container
+  ("no default dns servers"), and the relay needs none.
+- **Containers run with `ip_forward=1`** (7.25.1), so set
+  `IP_FORWARD=filtered` and add bridge filter rules per leg (§2). Example for
+  one leg with the relay at `10.0.30.2`; repeat for each veth:
+
+  ```
+  /interface bridge filter
+  add chain=forward in-interface=veth-iot mac-protocol=ip src-address=!10.0.30.2/32 action=drop comment="relay: nothing routed out"
+  add chain=forward out-interface=veth-iot mac-protocol=ip dst-address=224.0.0.0/4 action=accept comment="relay: multicast in"
+  add chain=forward out-interface=veth-iot mac-protocol=ip dst-address=!10.0.30.2/32 action=drop comment="relay: only its own address in"
+  ```
+
+  Test it: from a host on one network, add a route to another network via
+  the relay's address and ping something there. It must time out.
 - The image can be imported from a tar file on the router
   (`/container add file=…`), so the router needs no registry credentials.
   Prefer this when the registry has no read-only accounts. **The tar must be
