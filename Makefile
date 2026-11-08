@@ -15,11 +15,12 @@ dist/cast-relay-linux-%: $(wildcard *.go) go.mod go.sum
 
 # A single-platform docker-archive tar, importable with RouterOS
 # `/container add file=…` or `docker load`. No provenance attestations:
-# RouterOS expects a plain image.
+# RouterOS expects a plain image with uncompressed layers ("could not load
+# next layer" otherwise).
 image-%: dist/cast-relay-linux-%
 	docker buildx build --platform linux/$* --provenance=false --sbom=false \
 		-t cast-relay:$(VERSION) \
-		--output type=docker,dest=dist/cast-relay-$(VERSION)-$*.tar .
+		--output type=docker,dest=dist/cast-relay-$(VERSION)-$*.tar,compression=uncompressed,force-compression=true .
 	@ls -l dist/cast-relay-$(VERSION)-$*.tar
 
 clean:
