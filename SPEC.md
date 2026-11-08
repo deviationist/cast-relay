@@ -236,6 +236,12 @@ the binary.
 | `CONFIG` | path | `/config/cast-relay.json` | the config file |
 | `SUMMARY_INTERVAL` | duration | `5m` | how often the counter summary is logged |
 | `SSDP_NOTIFY` | `on`, `off` | **[decide]** | relay `NOTIFY` announcements (§5.2) |
+| `INTERFACES` | comma list | all | observe mode only: limit to these interface names (relay mode takes them from the config file) |
+| `OBSERVE_PROBE` | `on`, `off` | `on` | observe mode: send an mDNS service enumeration (then browse each type found) and an SSDP `ssdp:all` search on every interface |
+| `OBSERVE_PROBE_INTERVAL` | duration | `1m` | how often observe mode probes |
+
+Observe mode needs no config file: it listens on every interface with an
+IPv4 address.
 
 The rule: a single value that changes how the relay runs is an environment
 variable. Anything that describes networks or devices goes in the file.
