@@ -359,9 +359,13 @@ no capabilities.
   with `mountlists=`).
 - `restart-policy=on-failure` restarts it after a crash (checked on 7.25).
 - The image can be imported from a tar file on the router
-  (`/container add file=…`, from `docker save`), so the router needs no
-  registry credentials. Prefer this when the registry has no read-only
-  accounts.
+  (`/container add file=…`), so the router needs no registry credentials.
+  Prefer this when the registry has no read-only accounts. **The tar must be
+  in the classic `docker save` layout** (`<id>/layer.tar`, `manifest.json`,
+  `repositories`, uncompressed). The OCI layout that buildx and Docker 25+
+  write fails with `could not load next layer`, compressed or not (RouterOS
+  7.25.1, 2026-11-08). `make image-arm64` converts it with
+  `tools/legacy-tar.py`.
 
 **Docker on Linux:** `network_mode: host` on a machine that already has an
 interface on each network (VLAN sub-interfaces), with `/proc/sys/net/ipv4/ip_forward`
