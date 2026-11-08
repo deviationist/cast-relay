@@ -82,9 +82,10 @@ around each leg (example in §10):
 
 - **out of the relay:** drop IPv4 whose source isn't the relay's own address
   on that leg (forwarded packets keep the original sender's address);
-- **into the relay:** accept multicast (`224.0.0.0/4`), drop IPv4 whose
-  destination isn't the relay's own address (stops "use the relay as a
-  gateway").
+- **into the relay:** accept multicast (`224.0.0.0/4`) and, if GDM is used,
+  UDP broadcasts to ports 32410–32414 (both `255.255.255.255` and the
+  subnet's broadcast address); drop IPv4 whose destination isn't the relay's
+  own address (stops "use the relay as a gateway").
 
 ARP and the relay's own unicast and multicast traffic are unaffected.
 
