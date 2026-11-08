@@ -326,8 +326,36 @@ runs half-configured.
 | `plex` | `_plexmediasvr._tcp` | — | Plex server announcement (see below) |
 | `upnp-media` | — | `urn:schemas-upnp-org:device:MediaRenderer:1`, `urn:schemas-upnp-org:device:MediaServer:1` | DLNA renderers and servers |
 
-**[verify]** every profile against real devices with `MODE=observe` before
-v1. Each row is a starting point, not a guarantee.
+**Verified 2026-11-08** with `MODE=observe` against a smart TV, a speaker
+and an iPhone's apps: `airplay`, `dial` and `spotify-connect` match what
+receivers announce and what senders ask for. `googlecast`, `plex` and
+`upnp-media` are unverified. Observations that shaped the design:
+
+- **Senders ask for more than receivers offer**: an iPhone browsing AirPlay
+  also asks for `_airplay-bds._tcp`; YouTube asks for `_googlecast._tcp` and
+  a subtype (`_233637DE._sub._googlecast._tcp`) next to its DIAL search.
+  Unanswered questions are harmless.
+- **Receivers offer more than casting needs**: a TV also announced DLNA
+  renderer and vendor screen-sharing targets; a speaker about 20 UPnP
+  services. Only the allowlist passes.
+- **Vendor apps may need their own entries**: one speaker app searched for a
+  vendor mDNS type *and* a vendor SSDP target at once, so per-device `mdns`
+  and `ssdp` extras (§7.2) are necessary, not a nicety.
+- **Senders announce services of their own.** iOS apps check local-network
+  access by briefly publishing an instance of a service type and resolving
+  it (seen: `_spotify-ln-check._tcp`, and an allowlisted vendor type). This
+  is why announcements from client networks are dropped regardless of type
+  (§4.1 step 2).
+- **SSDP replies come from random ports**, one TV used a different source
+  port for each of its 15 replies. A speaker used one port for all of them.
+- **TXT records carry identifiers** (serial number, device ID). They pass
+  unchanged, because AirPlay needs them.
+- Some senders emit SSDP packets with no complete start line; they are
+  dropped as malformed.
+- Several apps also find devices **through the cloud** (YouTube, Spotify
+  Connect) when signed in to the same account, so "it works" on one phone
+  does not prove local discovery works. AirPlay and some vendor apps have no
+  such fallback.
 
 **Plex:** Plex players are mostly found through the plex.tv account, and
 Plex's local discovery (GDM) uses its own broadcast protocol on UDP
@@ -429,7 +457,8 @@ bridge point by its nature. Prefer running on the router.
 ## 12. Open questions
 
 1. **[verify]** Several veths per RouterOS container (§10).
-2. **[verify]** The built-in profiles against real devices (§7.3).
+2. ~~**[verify]** The built-in profiles against real devices (§7.3).~~
+   Done for `airplay`, `dial`, `spotify-connect` (2026-11-08).
 3. **[verify]** Follow-up ports per technology (§8).
 4. **[decide]** `SSDP_NOTIFY` default (§5.2).
 5. **[decide]** DIAL proxy in the relay (§5.3), v2.
