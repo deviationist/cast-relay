@@ -10,14 +10,17 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"golang.org/x/net/ipv4"
+	"golang.org/x/sys/unix"
 )
 
 var (
 	mdnsGroup = net.IPv4(224, 0, 0, 251)
 	ssdpGroup = net.IPv4(239, 255, 255, 250)
+	gdmGroup  = net.IPv4(239, 0, 0, 250) // older Plex clients
 )
 
 const (
@@ -50,6 +53,8 @@ type sourceStats struct {
 	mdnsTypes  []string
 	hosts      []string
 	ssdpTarget []string
+	gdm        []string
+	gdmPkts    int
 	servers    []string
 	queriesFor []string // types this source asked about
 }
@@ -63,7 +68,7 @@ func runObserve(ctx context.Context, s settings) error {
 	for _, n := range ifs {
 		slog.Info("interface", "name", n.Name, "index", n.Index, "addr", n.Addr, "subnet", n.Prefix)
 	}
-	slog.Info("observe mode: relaying nothing, logging mDNS and SSDP", "probe", s.Probe, "probe_interval", s.ProbeInterval, "summary_interval", s.SummaryInterval)
+	slog.Info("observe mode: relaying nothing, logging mDNS, SSDP and GDM", "probe", s.Probe, "probe_interval", s.ProbeInterval, "summary_interval", s.SummaryInterval)
 
 	mdnsConn, err := o.listen("0.0.0.0:5353", mdnsGroup)
 	if err != nil {
@@ -79,7 +84,23 @@ func runObserve(ctx context.Context, s settings) error {
 	}
 	defer ssdpConn.Close()
 
-	go func() { <-ctx.Done(); mdnsConn.Close(); ssdpConn.Close() }()
+	conns := []*ipv4.PacketConn{mdnsConn, ssdpConn}
+	for _, port := range gdmPorts {
+		c, err := o.listen(fmt.Sprintf("0.0.0.0:%d", port), gdmGroup)
+		if err != nil {
+			return fmt.Errorf("GDM %d: %w", port, err)
+		}
+		defer c.Close()
+		conns = append(conns, c)
+		go o.readLoop(ctx, c, "gdm", "broadcast")
+	}
+
+	go func() {
+		<-ctx.Done()
+		for _, c := range conns {
+			c.Close()
+		}
+	}()
 	go o.readLoop(ctx, mdnsConn, "mdns", "multicast")
 	go o.readLoop(ctx, ssdpConn, "ssdp", "multicast")
 	if s.Probe {
@@ -163,7 +184,7 @@ func (o *observer) handle(proto, via string, ifindex int, src net.Addr, b []byte
 		info, err := parseMDNS(b)
 		if err != nil {
 			o.count(func() { o.errors++ })
-			slog.Warn("unparsable mDNS", "iface", iface, "src", ua, "err", err)
+			slog.Warn("unparsable mDNS", "iface", iface, "src", ua, "err", err, "bytes", len(b), "start", rawPrefix(b))
 			return
 		}
 		o.recordMDNS(iface, ip.String(), info)
@@ -182,12 +203,23 @@ func (o *observer) handle(proto, via string, ifindex int, src net.Addr, b []byte
 		info, err := parseSSDP(b)
 		if err != nil {
 			o.count(func() { o.errors++ })
-			slog.Warn("unparsable SSDP", "iface", iface, "src", ua, "err", err)
+			slog.Warn("unparsable SSDP", "iface", iface, "src", ua, "err", err, "bytes", len(b), "start", rawPrefix(b))
 			return
 		}
 		o.recordSSDP(iface, ip.String(), info)
 		sum := info.summary()
 		o.logPacket(fmt.Sprintf("ssdp|%s|%s|%s|%s", iface, ua.IP, info.Kind, sum), "ssdp",
+			"iface", iface, "src", ua.String(), "via", via, "kind", info.Kind, "detail", sum)
+	case "gdm":
+		info, err := parseGDM(b)
+		if err != nil {
+			o.count(func() { o.errors++ })
+			slog.Warn("unparsable GDM", "iface", iface, "src", ua, "err", err, "bytes", len(b), "start", rawPrefix(b))
+			return
+		}
+		o.recordGDM(iface, ip.String(), info)
+		sum := info.summary()
+		o.logPacket(fmt.Sprintf("gdm|%s|%s|%s|%s", iface, ua.IP, info.Kind, sum), "gdm",
 			"iface", iface, "src", ua.String(), "via", via, "kind", info.Kind, "detail", sum)
 	}
 }
@@ -257,6 +289,16 @@ func (o *observer) recordSSDP(iface, ip string, info ssdpInfo) {
 	}
 }
 
+func (o *observer) recordGDM(iface, ip string, info gdmInfo) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	st := o.stats(iface, ip)
+	st.gdmPkts++
+	if l := info.label(); l != "" {
+		st.gdm = appendUnique(st.gdm, l)
+	}
+}
+
 func (o *observer) count(f func()) {
 	o.mu.Lock()
 	f()
@@ -273,6 +315,7 @@ func (o *observer) probeLoop(ctx context.Context) {
 		for _, n := range o.ifs {
 			o.probeMDNS(n)
 			go o.probeSSDP(ctx, n)
+			go o.probeGDM(ctx, n)
 		}
 		select {
 		case <-ctx.Done():
@@ -343,6 +386,43 @@ func (o *observer) probeSSDP(ctx context.Context, n netIf) {
 	}
 }
 
+// probeGDM broadcasts a GDM search for players (32412) and servers (32414)
+// on the interface's subnet and logs the unicast replies.
+func (o *observer) probeGDM(ctx context.Context, n netIf) {
+	lc := net.ListenConfig{Control: func(_, _ string, c syscall.RawConn) error {
+		var serr error
+		if err := c.Control(func(fd uintptr) {
+			serr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_BROADCAST, 1)
+		}); err != nil {
+			return err
+		}
+		return serr
+	}}
+	c, err := lc.ListenPacket(ctx, "udp4", net.JoinHostPort(n.Addr.String(), "0"))
+	if err != nil {
+		slog.Warn("GDM probe socket", "iface", n.Name, "err", err)
+		return
+	}
+	defer c.Close()
+	bcast := broadcastAddr(n.Prefix)
+	for _, port := range []int{32412, 32414} {
+		if _, err := c.WriteTo(gdmSearch, net.UDPAddrFromAddrPort(netip.AddrPortFrom(bcast, uint16(port)))); err != nil {
+			slog.Warn("GDM probe failed", "iface", n.Name, "port", port, "err", err)
+			return
+		}
+	}
+	slog.Debug("GDM probe sent", "iface", n.Name, "to", bcast)
+	_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	buf := make([]byte, maxPacket+1)
+	for ctx.Err() == nil {
+		k, src, err := c.ReadFrom(buf)
+		if err != nil {
+			return // deadline
+		}
+		o.handle("gdm", "probe-reply", n.Index, src, buf[:k])
+	}
+}
+
 func (o *observer) summary() {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -355,10 +435,11 @@ func (o *observer) summary() {
 	for _, k := range keys {
 		st := o.sources[k]
 		slog.Info("summary source", "iface", st.iface, "src", st.ip,
-			"mdns_pkts", st.mdnsPkts, "ssdp_pkts", st.ssdpPkts,
+			"mdns_pkts", st.mdnsPkts, "ssdp_pkts", st.ssdpPkts, "gdm_pkts", st.gdmPkts,
 			"offers_mdns", strings.Join(st.mdnsTypes, ","),
 			"hosts", strings.Join(st.hosts, ","),
 			"offers_ssdp", strings.Join(st.ssdpTarget, ","),
+			"offers_gdm", strings.Join(st.gdm, ","),
 			"server", strings.Join(st.servers, " | "),
 			"asked_for", truncate(strings.Join(st.queriesFor, ","), 400))
 	}

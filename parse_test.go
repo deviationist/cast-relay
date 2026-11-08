@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/netip"
 	"slices"
 	"strings"
 	"testing"
@@ -162,5 +163,41 @@ func TestParseMDNSSkipsUnreadableRecord(t *testing.T) {
 	}
 	if !slices.Contains(info.Types, "_airplay._tcp") {
 		t.Errorf("lost the good records: %v", info.Types)
+	}
+}
+
+func TestParseGDM(t *testing.T) {
+	resp := "HTTP/1.0 200 OK\r\nContent-Type: plex/media-player\r\nResource-Identifier: abc123\r\nName: Living Room\r\nPort: 32500\r\nProduct: Plex for Samsung\r\nVersion: 1.2.3\r\n\r\n"
+	info, err := parseGDM([]byte(resp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Kind != "RESPONSE" || info.Headers["PORT"] != "32500" {
+		t.Errorf("got %+v", info)
+	}
+	if got, want := info.label(), `plex/media-player "Living Room" (Plex for Samsung)`; got != want {
+		t.Errorf("label = %q, want %q", got, want)
+	}
+	if info, err := parseGDM([]byte("HELLO * HTTP/1.0\nName: TV")); err != nil || info.Kind != "HELLO" || info.Headers["NAME"] != "TV" {
+		t.Errorf("HELLO: %+v, %v", info, err)
+	}
+	if _, err := parseGDM(gdmSearch); err != nil {
+		t.Errorf("own search: %v", err)
+	}
+	if _, err := parseGDM(nil); err == nil {
+		t.Error("empty packet parsed")
+	}
+}
+
+func TestBroadcastAddr(t *testing.T) {
+	for in, want := range map[string]string{
+		"10.0.30.0/24":   "10.0.30.255",
+		"192.168.1.0/24": "192.168.1.255",
+		"10.0.8.0/30":    "10.0.8.3",
+		"172.16.0.0/12":  "172.31.255.255",
+	} {
+		if got := broadcastAddr(netip.MustParsePrefix(in)).String(); got != want {
+			t.Errorf("broadcastAddr(%s) = %s, want %s", in, got, want)
+		}
 	}
 }
