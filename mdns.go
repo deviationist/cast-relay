@@ -16,6 +16,7 @@ type mdnsInfo struct {
 	Records   []string // human-readable record summaries
 	Types     []string // service types seen (e.g. "_airplay._tcp")
 	Hosts     []string // SRV targets and A-record names
+	Skipped   int      // records that couldn't be unpacked
 }
 
 func parseMDNS(b []byte) (mdnsInfo, error) {
@@ -39,16 +40,66 @@ func parseMDNS(b []byte) (mdnsInfo, error) {
 			info.Types = appendUnique(info.Types, t)
 		}
 	}
-	for _, section := range []func() ([]dnsmessage.Resource, error){p.AllAnswers, p.AllAuthorities, p.AllAdditionals} {
-		rs, err := section()
-		if err != nil {
-			return info, err
-		}
-		for _, r := range rs {
-			info.addRecord(r)
+	// Parse record by record, so one record the library rejects doesn't lose
+	// the whole packet. Bonjour instance names may contain a "." inside a
+	// label (e.g. the sleep proxy's "70-35-60-63.1 Name"), which
+	// dnsmessage refuses to unpack.
+	sections := []struct {
+		header func() (dnsmessage.ResourceHeader, error)
+		skip   func() error
+	}{
+		{p.AnswerHeader, p.SkipAnswer},
+		{p.AuthorityHeader, p.SkipAuthority},
+		{p.AdditionalHeader, p.SkipAdditional},
+	}
+	for _, sec := range sections {
+		for {
+			h, err := sec.header()
+			if err == dnsmessage.ErrSectionDone {
+				break
+			}
+			if err != nil {
+				// The owner name itself is unreadable; the rest of the
+				// packet can't be located.
+				info.Skipped++
+				return info, nil
+			}
+			body, err := readBody(&p, h.Type)
+			if err != nil {
+				info.Skipped++
+				if err := sec.skip(); err != nil {
+					return info, nil
+				}
+				continue
+			}
+			info.addRecord(dnsmessage.Resource{Header: h, Body: body})
 		}
 	}
 	return info, nil
+}
+
+// readBody unpacks the body of the record whose header was just read.
+func readBody(p *dnsmessage.Parser, t dnsmessage.Type) (dnsmessage.ResourceBody, error) {
+	switch t {
+	case dnsmessage.TypePTR:
+		r, err := p.PTRResource()
+		return &r, err
+	case dnsmessage.TypeSRV:
+		r, err := p.SRVResource()
+		return &r, err
+	case dnsmessage.TypeTXT:
+		r, err := p.TXTResource()
+		return &r, err
+	case dnsmessage.TypeA:
+		r, err := p.AResource()
+		return &r, err
+	case dnsmessage.TypeAAAA:
+		r, err := p.AAAAResource()
+		return &r, err
+	default:
+		r, err := p.UnknownResource()
+		return &r, err
+	}
 }
 
 func (info *mdnsInfo) addRecord(r dnsmessage.Resource) {

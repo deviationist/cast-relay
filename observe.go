@@ -173,8 +173,11 @@ func (o *observer) handle(proto, via string, ifindex int, src net.Addr, b []byte
 			kind = "response"
 			detail = strings.Join(info.Records, "; ")
 		}
-		o.logPacket(fmt.Sprintf("mdns|%s|%s|%s", iface, ua, detail), "mdns",
-			"iface", iface, "src", ua.String(), "via", via, "kind", kind, "types", strings.Join(info.Types, ","), "detail", truncate(detail, 1500))
+		args := []any{"iface", iface, "src", ua.String(), "via", via, "kind", kind, "types", strings.Join(info.Types, ","), "detail", truncate(detail, 1500)}
+		if info.Skipped > 0 {
+			args = append(args, "skipped_records", info.Skipped)
+		}
+		o.logPacket(fmt.Sprintf("mdns|%s|%s|%s", iface, ua, detail), "mdns", args...)
 	case "ssdp":
 		info, err := parseSSDP(b)
 		if err != nil {

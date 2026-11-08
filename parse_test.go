@@ -144,3 +144,23 @@ func TestParseSSDP(t *testing.T) {
 		t.Errorf("own M-SEARCH: %v", err)
 	}
 }
+
+// A record whose name has a "." inside a label (Bonjour allows it; the
+// library doesn't) must cost only that record, not the packet.
+func TestParseMDNSSkipsUnreadableRecord(t *testing.T) {
+	good := buildAnnouncement(t)
+	// Append a PTR answer whose target label is "a.b" (length 3, contains '.').
+	bad := []byte{0xc0, 12, 0, 12, 0, 1, 0, 0, 0x11, 0x94, 0, 7, 3, 'a', '.', 'b', 0xc0, 12}
+	msg := append(append([]byte{}, good...), bad...)
+	msg[7]++ // one more answer
+	info, err := parseMDNS(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Skipped != 1 {
+		t.Errorf("skipped = %d, want 1", info.Skipped)
+	}
+	if !slices.Contains(info.Types, "_airplay._tcp") {
+		t.Errorf("lost the good records: %v", info.Types)
+	}
+}
