@@ -348,10 +348,14 @@ no capabilities.
   untagged. **[verify]** that one container can take several veths; the
   fallback is a single trunk veth with VLAN sub-interfaces created inside,
   which needs `CAP_NET_ADMIN`.
-- Env vars via `/container/envs`, the config file via `/container/mounts`.
-- There's no restart policy, and device-mode may disable the scheduler. A
-  `netwatch` that pings one of the relay's addresses and runs
-  `/container start` on failure works as a watchdog.
+- Env vars via `/container/envs` (a named list, attached with `envlists=`),
+  the config file via `/container/mounts` with `mode=ro,noexec` (attached
+  with `mountlists=`).
+- `restart-policy=on-failure` restarts it after a crash (checked on 7.25).
+- The image can be imported from a tar file on the router
+  (`/container add file=…`, from `docker save`), so the router needs no
+  registry credentials. Prefer this when the registry has no read-only
+  accounts.
 
 **Docker on Linux:** `network_mode: host` on a machine that already has an
 interface on each network (VLAN sub-interfaces), with `/proc/sys/net/ipv4/ip_forward`
