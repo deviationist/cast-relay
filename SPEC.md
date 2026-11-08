@@ -267,8 +267,12 @@ Container setup (sketch, **[verify]** syntax on 7.25):
 /interface/bridge/port add bridge=bridge interface=veth-cast-iot   pvid=53
 # + untagged membership for 52/53 in /interface/bridge/vlan
 /container/config set registry-url=https://registry.example.com username=… password=…
+/container/envs add list=cast-relay key=MODE value=observe
+/container/envs add list=cast-relay key=LOG_LEVEL value=info
+/container/mounts add name=cast-relay-config src=/cast-relay/config dst=/config  # read-only if 7.25 supports it [verify]
 /container add remote-image=registry.example.com/cast-relay:<ver> \
     interface=veth-cast-lan,veth-cast-guest,veth-cast-iot \
+    envlist=cast-relay mounts=cast-relay-config \
     start-on-boot=yes logging=yes memory-high=32M root-dir=…
 ```
 
@@ -280,8 +284,45 @@ itself.
 
 ## 8. Configuration
 
-One JSON file baked into the image (no volume; flash wear and simplicity).
-Changing it means building a new image tag.
+Two layers, both editable on the router without rebuilding the image:
+
+- **Environment variables** (WebFig *Container → Envs*, `/container/envs`)
+  for simple, general switches.
+- **A JSON file on a mount** (WebFig *Container → Mounts*, `/container/mounts`)
+  for anything structured: interfaces, devices, allowlists.
+
+A change to either takes effect on a container restart (Stop/Start). The image
+holds only the binary; no config is baked in.
+
+### 8.1 Environment variables
+
+| Variable | Values | Default | Meaning |
+|---|---|---|---|
+| `MODE` | `relay`, `observe` | `relay` | `observe` relays nothing and logs every mDNS/SSDP packet (§10) |
+| `LOG_LEVEL` | `info`, `debug` | `info` | `debug` logs one line per decision |
+| `CONFIG` | path | `/config/cast-relay.json` | the config file |
+| `SUMMARY_INTERVAL` | duration | `5m` | how often the counters summary is logged |
+
+Rule of thumb: a value that is a single scalar and changes how the relay runs
+is an environment variable. Anything that describes the network or the devices
+is in the file.
+
+### 8.2 Config file
+
+Lives on the router's flash in a mounted folder, e.g. router path
+`cast-relay/config` → container path `/config` (read-only mount).
+Edit it with WebFig *Files* (upload a new copy) or
+`ssh router` + `scp`/`sftp`, then restart the container. The repo keeps the
+reference copy as `config.example.json`. Copy it to the router after changing
+it.
+
+**Validated at start-up, strictly:** unknown keys, a device IP outside the
+`devices` interface's subnet, a client network that doesn't exist, an empty
+allowlist, or a malformed service type (`_name._tcp`/`_name._udp`) → the relay
+logs the exact error and **exits without relaying anything**. It never runs
+half-configured. The netwatch restart (§7) would just restart it into the same
+error, so the log line is the signal. It's also printed in each 5-minute
+summary until fixed.
 
 ```json
 {
@@ -312,7 +353,7 @@ Changing it means building a new image tag.
 }
 ```
 
-**[verify]** the service types by observation (`--observe`, §10) before
+**[verify]** the service types by observation (`MODE=observe`, §10) before
 fixing the lists. For example, whether the Sonos S2 app also needs SSDP
 (`urn:schemas-upnp-org:device:ZonePlayer:1`), and whether the TV announces
 anything AirPlay needs beyond `_airplay`/`_raop`.
@@ -330,7 +371,8 @@ anything AirPlay needs beyond `_airplay`/`_raop`.
 - Image in `registry.example.com/cast-relay`, pulled by the router with a
   read-only registry account.
 - `make test`, `make image`, `make push`; deploying = router-side
-  `/container` update (operator).
+  `/container` update (operator). A config-only change needs no build: copy
+  the file and restart.
 
 ## 10. Logging and observability
 
@@ -341,14 +383,14 @@ anything AirPlay needs beyond `_airplay`/`_raop`.
   dropped, by reason). A quiet but healthy relay still says so.
 - At `debug`: one line per decision (`mdns drop reason=not-allowlisted
   src=10.0.30.250 name=_roborock._tcp`).
-- **`--observe` mode:** relay nothing; log every mDNS/SSDP packet seen on all
+- **`MODE=observe`:** relay nothing; log every mDNS/SSDP packet seen on all
   three interfaces (source, type, names, ST/NT). Used once at the start to
   confirm the real service types and the TV's SSDP behaviour, since the
   router's packet sniffer is disabled by device-mode.
 
 ## 11. Testing
 
-**Unit:** golden packets (captured in `--observe` mode from the real TV and
+**Unit:** golden packets (captured with `MODE=observe` from the real TV and
 Sonos, plus hand-made hostile ones) through the mDNS and SSDP filters: wrong
 source, disallowed type, smuggled records in the additional section, `A`
 pointing elsewhere, `LOCATION` pointing elsewhere, oversized packets, a
@@ -379,7 +421,7 @@ and on `GuestWiFi`:**
 ## 12. Open questions
 
 1. **[verify]** Several veths per container on 7.25 (layout A vs B).
-2. **[verify]** The real service types and SSDP behaviour (`--observe`).
+2. **[verify]** The real service types and SSDP behaviour (`MODE=observe`).
 3. **[verify]** Whether Sonos/Spotify Connect need ports beyond 1400/1443
    from guest.
 4. **[decide]** DIAL: router masquerade (a) or relay proxy (b). Recommended:
