@@ -2,7 +2,7 @@ VERSION ?= $(shell git describe --always --dirty 2>/dev/null || echo dev)
 ARCHES  := arm64 amd64
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: test build image-arm64 image-amd64 clean
+.PHONY: test build clean
 
 test:
 	go vet ./...
