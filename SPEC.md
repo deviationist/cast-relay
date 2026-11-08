@@ -364,6 +364,14 @@ Plex's local discovery (GDM) uses its own broadcast protocol on UDP
 announcement. A GDM relay would be a third protocol module (**[decide]**, v2,
 only if account-based discovery isn't enough).
 
+Observed 2026-11-08 (GDM listener in observe mode): a TV's Plex app
+announced nothing itself. It registered with the Plex Media Server, and **the
+server answered GDM player searches on its behalf** (`plex/media-player`,
+`Port: 32400`, the server's own port). Control then runs client → server →
+player. With the server on the client network, players on an isolated
+network need no relay at all, only a firewall path from the player to the
+server. That makes a GDM module unnecessary in the usual setup.
+
 ## 8. What the network must allow
 
 The relay finds devices; the router must let the follow-up connections
